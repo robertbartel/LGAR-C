@@ -56,6 +56,15 @@ string verbosity="none";
 // small epsillon that is used to determine if the difference between two quantities is 0 while avoiding machine precision errors
 #define SMALL_EPS 1.E-12
 
+static bool any_wetting_front_can_lateral_flow(struct wetting_front *head, double lateral_flow_psi_threshold_cm)
+{
+  for (struct wetting_front *current = head; current != NULL; current = current->next) {
+    if (current->psi_cm <= lateral_flow_psi_threshold_cm)
+      return true;
+  }
+  return false;
+}
+
 
 /**
  * @brief Delete dynamic arrays allocated in Initialize() and held by this object
@@ -151,6 +160,7 @@ Update()
     state->lgar_mass_balance.volCRend_cm    = state->lgar_mass_balance.volCRstart_cm;
     state->lgar_mass_balance.volAET_cm      = 0.0;
     state->lgar_mass_balance.volrech_cm     = 0.0;
+    state->lgar_mass_balance.vollateral_flow_timestep_cm = 0.0;
     state->lgar_mass_balance.volrunoff_cm  += state->lgar_bmi_input_params->precipitation_mm_per_h * mm_to_cm;
     state->lgar_mass_balance.volQ_cm       += state->lgar_bmi_input_params->precipitation_mm_per_h * mm_to_cm;
     state->lgar_mass_balance.volQ_CR_cm     = 0.0;
@@ -205,6 +215,7 @@ Update()
   double volon_timestep_cm    = state->lgar_mass_balance.volon_timestep_cm;
   double volrunoff_timestep_cm      = 0.0;
   double volrech_timestep_cm        = 0.0;
+  double vollateral_flow_timestep_cm = 0.0;
   double volrunoff_giuh_timestep_cm = 0.0;
   double volQ_timestep_cm           = 0.0;
   double volQ_CR_timestep_cm        = 0.0;
@@ -236,6 +247,8 @@ Update()
   double a_slow = state->lgar_bmi_params.a_slow;
   double b_slow = state->lgar_bmi_params.b_slow;
   double frac_slow = state->lgar_bmi_params.frac_slow;
+  double lateral_flow_psi_threshold_cm = state->lgar_bmi_params.lateral_flow_psi_threshold_cm;
+  double lateral_flow_factor = state->lgar_bmi_params.lateral_flow_factor;
   double spf_factor = state->lgar_bmi_params.spf_factor;
   bool use_closed_form_G = state->lgar_bmi_params.use_closed_form_G; 
   bool adaptive_timestep = state->lgar_bmi_params.adaptive_timestep;
@@ -304,6 +317,11 @@ Update()
     else {
       state->lgar_mass_balance.cache_fluxes = FALSE;
     }
+  }
+
+  if (state->lgar_bmi_params.lateral_flow_enabled
+      && any_wetting_front_can_lateral_flow(state->head, state->lgar_bmi_params.lateral_flow_psi_threshold_cm)) {
+    state->lgar_mass_balance.cache_fluxes = FALSE;
   }
 
   if (caching_at_start && !state->lgar_mass_balance.cache_fluxes){
@@ -403,6 +421,7 @@ Update()
     double temp_rch               = 0.0; //handles case when a fraction of a wetting front technically crosses the lower boundary of the vadose zone
     double free_drainage_subtimestep_cm = 0.0;
     double free_drainage_for_CR = 0.0;
+    double lateral_flow_subtimestep_cm = 0.0;
 
     PET_subtimestep_cm_per_h = state->lgar_bmi_input_params->PET_mm_per_h * mm_to_cm;
 
@@ -550,7 +569,8 @@ Update()
 
         // move the wetting fronts without adding any water; this is done to close the mass balance
         // and also to merge / cross if necessary 
-        temp_rch = lgar_move_wetting_fronts(subtimestep_h, &free_drainage_subtimestep_cm, &temp_pd, wf_free_drainage_demand, volend_subtimestep_cm, mass_correction_for_cached_free_drainage_fluxes,
+        temp_rch = lgar_move_wetting_fronts(subtimestep_h, &free_drainage_subtimestep_cm, &lateral_flow_subtimestep_cm,
+              lateral_flow_psi_threshold_cm, lateral_flow_factor, &temp_pd, wf_free_drainage_demand, volend_subtimestep_cm, mass_correction_for_cached_free_drainage_fluxes,
               num_layers, &AET_subtimestep_cm, state->lgar_bmi_params.cum_layer_thickness_cm,
               state->lgar_bmi_params.layer_soil_type, state->lgar_bmi_params.frozen_factor,
               &state->head, state->state_previous, state->soil_properties);
@@ -639,7 +659,8 @@ Update()
         double volin_subtimestep_cm_temp = volin_subtimestep_cm;  /* passing this for mass balance only, the method modifies it
                     and returns percolated value, so we need to keep its original
                     value stored to copy it back*/
-        temp_rch = lgar_move_wetting_fronts(subtimestep_h, &free_drainage_subtimestep_cm, &volin_subtimestep_cm, wf_free_drainage_demand, volend_subtimestep_cm, mass_correction_for_cached_free_drainage_fluxes,
+        temp_rch = lgar_move_wetting_fronts(subtimestep_h, &free_drainage_subtimestep_cm, &lateral_flow_subtimestep_cm,
+              lateral_flow_psi_threshold_cm, lateral_flow_factor, &volin_subtimestep_cm, wf_free_drainage_demand, volend_subtimestep_cm, mass_correction_for_cached_free_drainage_fluxes,
               num_layers, &AET_subtimestep_cm, state->lgar_bmi_params.cum_layer_thickness_cm,
               state->lgar_bmi_params.layer_soil_type, state->lgar_bmi_params.frozen_factor,
               &state->head, state->state_previous, state->soil_properties);
@@ -721,7 +742,7 @@ Update()
     // mass balance at the subtimestep (local mass balance)
 
     double local_mb = volstart_subtimestep_cm + precip_subtimestep_cm + volon_timestep_cm - volrunoff_subtimestep_cm - volQ_CR_subtimestep_cm - volCRend_subtimestep_cm + volCRstart_subtimestep_cm 
-                      - AET_subtimestep_cm - volon_subtimestep_cm - volrech_subtimestep_cm - volend_subtimestep_cm;
+                      - AET_subtimestep_cm - volon_subtimestep_cm - volrech_subtimestep_cm - lateral_flow_subtimestep_cm - volend_subtimestep_cm;
 
 
     /*----------------------------------------------------------------------*/
@@ -730,6 +751,7 @@ Update()
     //separating code such that most non substep vars (so xxx_timestep and not xxx_subtimestep) are updated in just one place. not all, because some must be set before substepping.
     volin_timestep_cm += volin_subtimestep_cm;
     volrech_timestep_cm += volrech_subtimestep_cm;
+    vollateral_flow_timestep_cm += lateral_flow_subtimestep_cm;
 
     volrunoff_timestep_cm += volrunoff_subtimestep_cm;
 
@@ -758,9 +780,10 @@ Update()
         Runoff        = %14.10f \n\
         AET           = %14.10f \n\
         Percolation   = %14.10f \n\
+        Lateral flow  = %14.10f \n\
         Final water   = %14.10f \n", local_mb, volstart_subtimestep_cm, precip_subtimestep_cm, volon_subtimestep_cm,
         volin_subtimestep_cm, volrunoff_subtimestep_cm, AET_subtimestep_cm, volrech_subtimestep_cm,
-        volend_subtimestep_cm);
+        lateral_flow_subtimestep_cm, volend_subtimestep_cm);
       }
       else {
         printf("\nLocal mass balance at this timestep... \n\
@@ -772,13 +795,14 @@ Update()
         Runoff (total)          = %14.10f \n\
         AET                     = %14.10f \n\
         Percolation             = %14.10f \n\
+        Lateral flow            = %14.10f \n\
         Final water (LGAR)      = %14.10f \n\
         Water added (con res)   = %14.10f \n\
         Initial water (con res) = %14.10f \n\
         Final water (con res)   = %14.10f \n\
         Runoff (con res)        = %14.10f \n", local_mb, volstart_subtimestep_cm, precip_subtimestep_cm, volon_subtimestep_cm,
         volin_subtimestep_cm, volrunoff_subtimestep_cm, AET_subtimestep_cm, volrech_subtimestep_cm,
-        volend_subtimestep_cm, volin_CR_subtimestep_cm, volCRstart_subtimestep_cm,
+        lateral_flow_subtimestep_cm, volend_subtimestep_cm, volin_CR_subtimestep_cm, volCRstart_subtimestep_cm,
         volCRend_subtimestep_cm, volQ_CR_subtimestep_cm);
       }
 
@@ -805,7 +829,7 @@ Update()
   } // end of subcycling
 
   //update giuh at the time step level (was previously updated at the sub time step level)
-  volrunoff_giuh_timestep_cm = giuh_convolution_integral(volrunoff_timestep_cm + volQ_CR_timestep_cm , num_giuh_ordinates, giuh_ordinates, giuh_runoff_queue);
+  volrunoff_giuh_timestep_cm = giuh_convolution_integral(volrunoff_timestep_cm + volQ_CR_timestep_cm + vollateral_flow_timestep_cm, num_giuh_ordinates, giuh_ordinates, giuh_runoff_queue);
 
   // total mass of water leaving the system, at this time it is the giuh-only, but later will add groundwater component as well.
   // when groundwater component is added, it should probably happen inside of the subcycling loop.
@@ -850,6 +874,7 @@ Update()
   state->lgar_mass_balance.volCRend_timestep_cm   = volCRend_timestep_cm;
   state->lgar_mass_balance.volAET_timestep_cm     = AET_timestep_cm;
   state->lgar_mass_balance.volrech_timestep_cm    = volrech_timestep_cm;
+  state->lgar_mass_balance.vollateral_flow_timestep_cm = vollateral_flow_timestep_cm;
   state->lgar_mass_balance.volrunoff_timestep_cm  = volrunoff_timestep_cm;
   state->lgar_mass_balance.volQ_timestep_cm       = volQ_timestep_cm;
   state->lgar_mass_balance.volQ_CR_timestep_cm    = volQ_CR_timestep_cm;
@@ -871,6 +896,7 @@ Update()
   state->lgar_mass_balance.volCRend_cm    = volCRend_timestep_cm;
   state->lgar_mass_balance.volAET_cm     += AET_timestep_cm;
   state->lgar_mass_balance.volrech_cm    += volrech_timestep_cm;
+  state->lgar_mass_balance.vollateral_flow_cm += vollateral_flow_timestep_cm;
   state->lgar_mass_balance.volrunoff_cm  += volrunoff_timestep_cm;
   state->lgar_mass_balance.volQ_cm       += volQ_timestep_cm;
   state->lgar_mass_balance.volQ_CR_cm    += volQ_CR_timestep_cm;
@@ -1015,6 +1041,8 @@ update_calibratable_parameters()
       <<", a = "     << state->lgar_bmi_params.a
       <<", b = "     << state->lgar_bmi_params.b
       <<", frac_to_CR = "     << state->lgar_bmi_params.frac_to_CR
+      <<", lateral_flow_psi_threshold = " << state->lgar_bmi_params.lateral_flow_psi_threshold_cm
+      <<", lateral_flow_factor = " << state->lgar_bmi_params.lateral_flow_factor
       <<", spf_factor = "     << state->lgar_bmi_params.spf_factor <<
       "\n";
     if (state->lgar_bmi_params.frac_slow){
@@ -1033,6 +1061,10 @@ update_calibratable_parameters()
   state->lgar_bmi_params.a                     = state->lgar_calib_params.a;
   state->lgar_bmi_params.b                     = state->lgar_calib_params.b;
   state->lgar_bmi_params.frac_to_CR            = state->lgar_calib_params.frac_to_CR;
+  if (state->lgar_bmi_params.lateral_flow_enabled){
+    state->lgar_bmi_params.lateral_flow_psi_threshold_cm = state->lgar_calib_params.lateral_flow_psi_threshold_cm;
+    state->lgar_bmi_params.lateral_flow_factor           = state->lgar_calib_params.lateral_flow_factor;
+  }
   state->lgar_bmi_params.spf_factor            = state->lgar_calib_params.spf_factor;
 
   if (state->lgar_bmi_params.frac_slow){
@@ -1046,6 +1078,10 @@ update_calibratable_parameters()
     if (state->lgar_bmi_params.frac_slow){
       state->lgar_bmi_params.a_slow = pow(10.0, state->lgar_calib_params.a_slow);
     }
+    if (state->lgar_bmi_params.lateral_flow_enabled){
+      state->lgar_bmi_params.lateral_flow_psi_threshold_cm = pow(10.0, state->lgar_calib_params.lateral_flow_psi_threshold_cm);
+      state->lgar_bmi_params.lateral_flow_factor = pow(10.0, state->lgar_calib_params.lateral_flow_factor);
+    }
   }
 
   if (verbosity.compare("high") == 0 || verbosity.compare("low") == 0) {
@@ -1055,6 +1091,8 @@ update_calibratable_parameters()
       <<", a = "     << state->lgar_bmi_params.a
       <<", b = "     << state->lgar_bmi_params.b
       <<", frac_to_CR = "     << state->lgar_bmi_params.frac_to_CR
+      <<", lateral_flow_psi_threshold = " << state->lgar_bmi_params.lateral_flow_psi_threshold_cm
+      <<", lateral_flow_factor = " << state->lgar_bmi_params.lateral_flow_factor
       <<", spf_factor = "     << state->lgar_bmi_params.spf_factor <<
       "\n";
     if (state->lgar_bmi_params.frac_slow){
@@ -1121,6 +1159,7 @@ GetVarGrid(std::string name)
 	   || name.compare("actual_evapotranspiration") == 0) // double
     return 1;
   else if (name.compare("surface_runoff") == 0 || name.compare("giuh_runoff") == 0 || name.compare("a") == 0 || name.compare("b") == 0 || name.compare("frac_to_CR") == 0 || name.compare("spf_factor") == 0
+	   || name.compare("lateral_flow_psi_threshold") == 0 || name.compare("lateral_flow_factor") == 0
 	   || name.compare("a_slow") == 0 || name.compare("b_slow") == 0 || name.compare("frac_slow") == 0 || name.compare("soil_storage") == 0 || name.compare("field_capacity") == 0 || name.compare("ponded_depth_max") == 0)// double
     return 1;
   else if (name.compare("total_discharge") == 0 || name.compare("infiltration") == 0
@@ -1230,6 +1269,7 @@ GetVarLocation(std::string name)
       || name.compare("actual_evapotranspiration") == 0) // double
     return "node";
   else if (name.compare("surface_runoff") == 0 || name.compare("giuh_runoff") == 0 || name.compare("a") == 0 || name.compare("b") == 0 || name.compare("frac_to_CR") == 0 || name.compare("spf_factor") == 0
+	   || name.compare("lateral_flow_psi_threshold") == 0 || name.compare("lateral_flow_factor") == 0
 	   || name.compare("a_slow") == 0 || name.compare("b_slow") == 0 || name.compare("frac_slow") == 0 || name.compare("soil_storage") == 0) // double
     return "node";
    else if (name.compare("total_discharge") == 0 || name.compare("infiltration") == 0
@@ -1416,6 +1456,10 @@ GetValuePtr (std::string name)
     return (void*)&this->state->lgar_calib_params.b_slow;
   else if (name.compare("frac_slow") == 0)
     return (void*)&this->state->lgar_calib_params.frac_slow;
+  else if (name.compare("lateral_flow_psi_threshold") == 0)
+    return (void*)&this->state->lgar_calib_params.lateral_flow_psi_threshold_cm;
+  else if (name.compare("lateral_flow_factor") == 0)
+    return (void*)&this->state->lgar_calib_params.lateral_flow_factor;
   else if (name.compare("spf_factor") == 0)
     return (void*)&this->state->lgar_calib_params.spf_factor;
   else {
