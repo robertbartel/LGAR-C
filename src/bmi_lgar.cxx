@@ -56,6 +56,7 @@ string verbosity="none";
 // small epsillon that is used to determine if the difference between two quantities is 0 while avoiding machine precision errors
 #define SMALL_EPS 1.E-12
 
+// checks if there is at least one WF contributing to lateral flow. If so then flux caching will be disabled.
 static bool any_wetting_front_can_lateral_flow(struct wetting_front *head, double lateral_flow_psi_threshold_cm)
 {
   for (struct wetting_front *current = head; current != NULL; current = current->next) {

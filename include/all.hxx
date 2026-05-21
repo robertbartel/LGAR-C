@@ -147,7 +147,7 @@ struct lgar_bmi_parameters
   double frac_slow = 0.0;               // parameter for nonlinear reservoir 
   bool   lateral_flow_enabled = false;        // if true, wetting fronts can contribute lateral flow to the GIUH queue
   double lateral_flow_psi_threshold_cm = 0.0; // lateral flow is zero when a wetting front's psi is above this threshold [cm]
-  double lateral_flow_factor = 0.0;           // multiplier applied to K(theta) to calculate wetting-front lateral flow
+  double lateral_flow_factor = 0.0;           // multiplier applied to K(theta) to calculate wetting front lateral flow
   double spf_factor = 0.98;              // parameter that controls the theta value above which contributions to the nonlinear reservoir will be made
   double precip_previous_timestep_cm;    // amount of rainfall (previous time step)
 
@@ -186,7 +186,7 @@ struct lgar_mass_balance_variables
   double volAET_timestep_cm;         // volume of AET at each timestep
   double volPET_timestep_cm;         // volume of PET at each timestep
   double volrech_timestep_cm;        // volume of water leaving soil to the ground water (ground water recharge)
-  double vollateral_flow_timestep_cm;// volume of wetting-front lateral flow at each timestep
+  double vollateral_flow_timestep_cm;// volume of wetting front lateral flow at each timestep
   double volrunoff_giuh_timestep_cm; // volume of giuh runoff at each timestep
   double volQ_timestep_cm;           // total outgoing water (surface runoff + water from conceptual reservoirs, both of which go through GIUH)
   double volQ_CR_timestep_cm;        // outgoing water just from conceptual reservoirs
@@ -215,7 +215,7 @@ struct lgar_mass_balance_variables
   double accumulated_free_drainage = 0.0;
 
   double volrech_cm;          // volume of water leaving soil through the bottom of the domain (ground water recharge)
-  double vollateral_flow_cm;  // volume of wetting-front lateral flow routed through GIUH
+  double vollateral_flow_cm;  // volume of wetting front lateral flow routed through GIUH
   double volrunoff_giuh_cm;   // volume of giuh runoff
   double volQ_cm;             // total outgoing water
   double volQ_CR_cm;          // water outgoing just from conceptual reservoirs
@@ -262,7 +262,7 @@ struct lgar_calib_parameters
   double b_slow;                      // parameter for nonlinear reservoir
   double frac_slow;             // parameter for nonlinear reservoir
   double lateral_flow_psi_threshold_cm; // lateral flow is zero when a wetting front's psi is above this threshold [cm]
-  double lateral_flow_factor;    // multiplier applied to K(theta) to calculate wetting-front lateral flow
+  double lateral_flow_factor;    // multiplier applied to K(theta) to calculate wetting front lateral flow
   double spf_factor;             // parameter for nonlinear reservoir
 
 };

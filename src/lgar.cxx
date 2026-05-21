@@ -1310,12 +1310,30 @@ extern int wetting_front_free_drainage(struct wetting_front* head) {
 
 // ############################################################################################
 /*
-  Compute the lateral-flow amount assigned to each wetting front for the current subtimestep.
-  A wetting front's candidate lateral flow is K(theta) times a user-supplied factor, scaled by
+  Compute the lateral flow amount assigned to each wetting front for the current subtimestep.
+  A wetting front's candidate lateral flow is K(theta) times a factor, scaled by
   the fraction of the soil column represented by that front. Non-deepest to_bottom fronts do not
   lose water directly; their candidate lateral flow is assigned to the first non-to_bottom front
-  below them, matching the wetting-front mass-balance target that will be updated later.
+  below them, matching the wetting front mass balance target that will be updated later.
 */
+// ############################################################################################
+double lgar_lateral_flow_support_depth_cm(double layer_top_cm, double layer_bottom_cm,
+					  const struct wetting_front *previous,
+					  const struct wetting_front *current)
+{
+  if (current == NULL)
+    return 0.0;
+
+  double support_top_cm = layer_top_cm;
+  if (previous != NULL && previous->layer_num == current->layer_num)
+    support_top_cm = fmax(layer_top_cm, previous->depth_cm);
+
+  double support_bottom_cm = current->to_bottom ? layer_bottom_cm : current->depth_cm;
+  support_bottom_cm = fmin(support_bottom_cm, layer_bottom_cm);
+
+  return fmax(0.0, support_bottom_cm - support_top_cm);
+}
+
 // ############################################################################################
 static void lgar_calc_lateral_fluxes_by_front(double timestep_h, int num_layers, double lateral_flow_psi_threshold_cm,
 					      double lateral_flow_factor, double *cum_layer_thickness_cm,
@@ -1328,17 +1346,13 @@ static void lgar_calc_lateral_fluxes_by_front(double timestep_h, int num_layers,
   if (column_depth_cm <= 0.0)
     return;
 
-  for (struct wetting_front *current = head; current != NULL; current = current->next) {
+  for (struct wetting_front *previous = NULL, *current = head; current != NULL; previous = current, current = current->next) {
     double lateral_flux_cm_per_h = 0.0;
 
     if (current->psi_cm <= lateral_flow_psi_threshold_cm) {
       double layer_top_cm = cum_layer_thickness_cm[current->layer_num - 1];
-      double support_depth_cm;
-
-      if (current->to_bottom)
-	support_depth_cm = cum_layer_thickness_cm[current->layer_num] - layer_top_cm;
-      else
-	support_depth_cm = current->depth_cm - layer_top_cm;
+      double layer_bottom_cm = cum_layer_thickness_cm[current->layer_num];
+      double support_depth_cm = lgar_lateral_flow_support_depth_cm(layer_top_cm, layer_bottom_cm, previous, current);
 
       support_depth_cm = fmax(0.0, fmin(support_depth_cm, column_depth_cm));
       double vadose_fraction = support_depth_cm / column_depth_cm;
@@ -1385,6 +1399,38 @@ static double lgar_apply_lateral_flux_to_prior_mass(double requested_lateral_flu
   return applied_lateral_flux_cm;
 }
 
+double lgar_to_bottom_stack_layer_mass_cm(int layer_num, double layer_top_cm, double layer_bottom_cm,
+					  double stack_theta, const struct wetting_front *previous_front)
+{
+  if (previous_front != NULL && !previous_front->to_bottom && previous_front->layer_num == layer_num) {
+    double upper_depth_cm = fmax(layer_top_cm, fmin(previous_front->depth_cm, layer_bottom_cm));
+    return (upper_depth_cm - layer_top_cm) * previous_front->theta + (layer_bottom_cm - upper_depth_cm) * stack_theta;
+  }
+
+  return (layer_bottom_cm - layer_top_cm) * stack_theta;
+}
+
+static double lgar_to_bottom_stack_mass_from_profile(int stack_start_front_num, int stack_end_front_num,
+						     double *cum_layer_thickness_cm, struct wetting_front* head)
+{
+  double stack_mass_cm = 0.0;
+
+  for (int front_num = stack_start_front_num; front_num <= stack_end_front_num; front_num++) {
+    struct wetting_front *front = listFindFront(front_num, head, NULL);
+    if (front == NULL)
+      return 0.0;
+
+    int layer_num = front->layer_num;
+    double layer_top_cm = cum_layer_thickness_cm[layer_num - 1];
+    double layer_bottom_cm = cum_layer_thickness_cm[layer_num];
+    struct wetting_front *previous_front = front_num > 1 ? listFindFront(front_num - 1, head, NULL) : NULL;
+    stack_mass_cm += lgar_to_bottom_stack_layer_mass_cm(layer_num, layer_top_cm, layer_bottom_cm,
+							front->theta, previous_front);
+  }
+
+  return stack_mass_cm;
+}
+
 static double lgar_to_bottom_stack_mass_for_psi(double psi_cm, int stack_start_front_num, int stack_end_front_num,
 						double *cum_layer_thickness_cm, int *soil_type,
 						struct wetting_front* head, struct soil_properties_ *soil_properties)
@@ -1398,11 +1444,14 @@ static double lgar_to_bottom_stack_mass_for_psi(double psi_cm, int stack_start_f
 
     int layer_num = front->layer_num;
     int soil_num = soil_type[layer_num];
-    double layer_thickness_cm = cum_layer_thickness_cm[layer_num] - cum_layer_thickness_cm[layer_num - 1];
+    double layer_top_cm = cum_layer_thickness_cm[layer_num - 1];
+    double layer_bottom_cm = cum_layer_thickness_cm[layer_num];
+    struct wetting_front *previous_front = front_num > 1 ? listFindFront(front_num - 1, head, NULL) : NULL;
     double theta = calc_theta_from_h(psi_cm, soil_properties[soil_num].vg_alpha_per_cm,
 				     soil_properties[soil_num].vg_m, soil_properties[soil_num].vg_n,
 				     soil_properties[soil_num].theta_e, soil_properties[soil_num].theta_r);
-    stack_mass_cm += layer_thickness_cm * theta;
+    stack_mass_cm += lgar_to_bottom_stack_layer_mass_cm(layer_num, layer_top_cm, layer_bottom_cm,
+							theta, previous_front);
   }
 
   return stack_mass_cm;
@@ -1431,16 +1480,8 @@ static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requeste
     stack_start_front_num--;
   }
 
-  double prior_stack_mass_cm = 0.0;
-  for (int front_num = stack_start_front_num; front_num <= stack_end_front_num; front_num++) {
-    struct wetting_front *front_old = listFindFront(front_num, *head, state_previous);
-    if (front_old == NULL)
-      return 0.0;
-
-    int layer_num = front_old->layer_num;
-    double layer_thickness_cm = cum_layer_thickness_cm[layer_num] - cum_layer_thickness_cm[layer_num - 1];
-    prior_stack_mass_cm += layer_thickness_cm * front_old->theta;
-  }
+  double prior_stack_mass_cm = lgar_to_bottom_stack_mass_from_profile(stack_start_front_num, stack_end_front_num,
+								      cum_layer_thickness_cm, state_previous);
 
   double minimum_stack_mass_cm = lgar_to_bottom_stack_mass_for_psi(PSI_UPPER_LIM, stack_start_front_num, stack_end_front_num,
 								  cum_layer_thickness_cm, soil_type, *head, soil_properties);
@@ -2116,13 +2157,13 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 	 + *lateral_flow_subtimestep_cm + bottom_boundary_flux_cm);
     double current_mass = lgar_calc_mass_bal(cum_layer_thickness_cm, *head);
 
-    if (fabs(current_mass - target_mass) > MBAL_ITERATIVE_TOLERANCE) {
-      int correction_front_num = lgar_find_lateral_flow_mass_correction_front(lateral_flux_cm_by_front, *head);
-      if (correction_front_num > 0) {
-	lgar_theta_mass_balance_correction(false, correction_front_num, target_mass, head,
-					   cum_layer_thickness_cm, soil_type, soil_properties);
-      }
-    }
+  //   if (fabs(current_mass - target_mass) > MBAL_ITERATIVE_TOLERANCE) {
+  //     int correction_front_num = lgar_find_lateral_flow_mass_correction_front(lateral_flux_cm_by_front, *head);
+  //     if (correction_front_num > 0) {
+	// lgar_theta_mass_balance_correction(false, correction_front_num, target_mass, head,
+	// 				   cum_layer_thickness_cm, soil_type, soil_properties);
+  //     }
+  //   }
   }
 
   /***********************************************/
