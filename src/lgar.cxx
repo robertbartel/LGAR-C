@@ -1457,13 +1457,22 @@ static double lgar_to_bottom_stack_mass_for_psi(double psi_cm, int stack_start_f
   return stack_mass_cm;
 }
 
+static bool lgar_front_changed_by_lateral_stack(const struct wetting_front *front,
+						const std::vector<int>& lateral_stack_changed_by_front)
+{
+  return front != NULL && front->front_num >= 0
+    && front->front_num < (int)lateral_stack_changed_by_front.size()
+    && lateral_stack_changed_by_front[front->front_num] != 0;
+}
+
 static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requested_lateral_flux_cm, int stack_end_front_num,
 								 int num_layers, double *cum_layer_thickness_cm,
 								 int *soil_type, double *frozen_factor,
 								 struct wetting_front** head,
 								 struct wetting_front* state_previous,
 								 struct soil_properties_ *soil_properties,
-								 double *lateral_flow_subtimestep_cm)
+								 double *lateral_flow_subtimestep_cm,
+								 std::vector<int> *lateral_stack_changed_by_front)
 {
   if (requested_lateral_flux_cm <= 0.0 || head == NULL || *head == NULL)
     return 0.0;
@@ -1519,6 +1528,10 @@ static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requeste
     double Se = calc_Se_from_theta(front->theta, soil_properties[soil_num].theta_e, soil_properties[soil_num].theta_r);
     front->K_cm_per_h = calc_K_from_Se(Se, frozen_factor[layer_num] * soil_properties[soil_num].Ksat_cm_per_h,
 				       soil_properties[soil_num].vg_m);
+
+    if (lateral_stack_changed_by_front != NULL && front->front_num >= 0
+	&& front->front_num < (int)lateral_stack_changed_by_front->size())
+      (*lateral_stack_changed_by_front)[front->front_num] = 1;
   }
 
   if (lateral_flow_subtimestep_cm != NULL)
@@ -1592,6 +1605,7 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 
   int number_of_wetting_fronts = listLength(*head);
   std::vector<double> lateral_flux_cm_by_front(number_of_wetting_fronts + 1, 0.0);
+  std::vector<int> lateral_stack_changed_by_front(number_of_wetting_fronts + 1, 0);
   lgar_calc_lateral_fluxes_by_front(timestep_h, num_layers, lateral_flow_psi_threshold_cm,
 				    lateral_flow_factor, cum_layer_thickness_cm,
 				    state_previous, lateral_flux_cm_by_front);
@@ -1799,7 +1813,8 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 											  num_layers, cum_layer_thickness_cm,
 											  soil_type, frozen_factor, head,
 											  state_previous, soil_properties,
-											  lateral_flow_subtimestep_cm);
+											  lateral_flow_subtimestep_cm,
+											  &lateral_stack_changed_by_front);
       if (applied_lateral_flux_cm > 0.0 && verbosity.compare("high") == 0) {
 	printf("Applied lateral flow to deepest to_bottom WF %d stack mass balance: %.10e cm\n", wf, applied_lateral_flux_cm);
       }
@@ -1824,7 +1839,8 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 
 	// double free_drainage_demand = 0;
 	// prior mass = mass contained in the current old wetting front
-	double prior_mass = current_old->depth_cm * (current_old->theta -  next_old->theta);
+	double next_reference_theta = lgar_front_changed_by_lateral_stack(next, lateral_stack_changed_by_front) ? next->theta : next_old->theta;
+	double prior_mass = current_old->depth_cm * (current_old->theta -  next_reference_theta);
 
 	if (wf_free_drainage_demand == wf)
 	  prior_mass += precip_mass_to_add - (free_drainage_demand + mass_correction_for_cached_free_drainage_fluxes + actual_ET_demand);
@@ -1903,14 +1919,16 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 
 
 	double psi_cm_old = current_old->psi_cm;
-	double psi_cm_below_old = current_old->next->psi_cm;
+	bool next_changed_by_lateral_stack = lgar_front_changed_by_lateral_stack(next, lateral_stack_changed_by_front);
+	double psi_cm_below_old = next_changed_by_lateral_stack ? next->psi_cm : current_old->next->psi_cm;
 
 	double psi_cm = current->psi_cm;
 	double psi_cm_below = next->psi_cm;
 
 	// mass = delta(depth) * delta(theta)
 	//      = difference in current and next wetting front thetas times depth of the current wetting front
-	double prior_mass = (current_old->depth_cm - cum_layer_thickness_cm[layer_num-1]) * (current_old->theta - next_old->theta);
+	double next_reference_theta = next_changed_by_lateral_stack ? next->theta : next_old->theta;
+	double prior_mass = (current_old->depth_cm - cum_layer_thickness_cm[layer_num-1]) * (current_old->theta - next_reference_theta);
 	double new_mass = (current->depth_cm - cum_layer_thickness_cm[layer_num-1]) * (current->theta - next->theta);
 
 	// compute mass in the layers above the current wetting front
