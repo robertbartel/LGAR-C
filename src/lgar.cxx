@@ -1540,30 +1540,6 @@ static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requeste
   return applied_lateral_flux_cm;
 }
 
-static int lgar_find_lateral_flow_mass_correction_front(const std::vector<double>& lateral_flux_cm_by_front,
-							struct wetting_front* head)
-{
-  for (int front_num = 1; front_num < (int)lateral_flux_cm_by_front.size(); front_num++) {
-    if (lateral_flux_cm_by_front[front_num] <= 0.0)
-      continue;
-
-    struct wetting_front *front = listFindFront(front_num, head, NULL);
-    if (front == NULL)
-      continue;
-
-    while (front->front_num > 1) {
-      struct wetting_front *previous_front = listFindFront(front->front_num - 1, head, NULL);
-      if (previous_front == NULL || !previous_front->to_bottom)
-	break;
-      front = previous_front;
-    }
-
-    return front->front_num;
-  }
-
-  return -1;
-}
-
 // #######################################################################################################
 /*
   the function moves wetting fronts, merge wetting fronts and does the mass balance correction when needed
@@ -2167,21 +2143,6 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
     if (verbosity.compare("high") == 0) {
       printf("correction_type_surf at end of iteration in while loop: %d \n", correction_type_surf);
     }
-  }
-
-  if (lateral_flow_subtimestep_cm != NULL && *lateral_flow_subtimestep_cm > 0.0) {
-    double target_mass = old_mass + precip_mass_to_add
-      - (*AET_demand_cm + free_drainage_demand + mass_correction_for_cached_free_drainage_fluxes
-	 + *lateral_flow_subtimestep_cm + bottom_boundary_flux_cm);
-    double current_mass = lgar_calc_mass_bal(cum_layer_thickness_cm, *head);
-
-  //   if (fabs(current_mass - target_mass) > MBAL_ITERATIVE_TOLERANCE) {
-  //     int correction_front_num = lgar_find_lateral_flow_mass_correction_front(lateral_flux_cm_by_front, *head);
-  //     if (correction_front_num > 0) {
-	// lgar_theta_mass_balance_correction(false, correction_front_num, target_mass, head,
-	// 				   cum_layer_thickness_cm, soil_type, soil_properties);
-  //     }
-  //   }
   }
 
   /***********************************************/
