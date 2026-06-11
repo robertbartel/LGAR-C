@@ -1310,11 +1310,16 @@ extern int wetting_front_free_drainage(struct wetting_front* head) {
 
 // ############################################################################################
 /*
-  Compute the lateral flow amount assigned to each wetting front for the current subtimestep.
-  A wetting front's candidate lateral flow is K(theta) times a factor, scaled by
-  the fraction of the soil column represented by that front. Non-deepest to_bottom fronts do not
-  lose water directly; their candidate lateral flow is assigned to the first non-to_bottom front
-  below them, matching the wetting front mass balance target that will be updated later.
+  Compute the vertical support depth represented by one wetting front within its soil layer.
+
+  The support depth is the portion of the layer assigned to current for lateral flow scaling.
+  If another wetting front exists immediately above current in the same layer, the support
+  depth starts at that upper front's depth. Otherwise it starts at the top of the layer. For a
+  to_bottom front, the support depth extends to the bottom of the layer; for a normal front, it
+  extends to current->depth_cm.
+
+  The returned depth is later divided by total column depth to scale candidate lateral flow by
+  the fraction of the LGAR domain represented by this wetting front.
 */
 // ############################################################################################
 double lgar_lateral_flow_support_depth_cm(double layer_top_cm, double layer_bottom_cm,
@@ -1345,8 +1350,12 @@ double lgar_lateral_flow_support_depth_cm(double layer_top_cm, double layer_bott
   not remove water from the wetting front state.
 
   For non-deepest to_bottom fronts, the lateral flow amount is assigned to the
-  first non-to_bottom wetting front below it, because that is the front whose
-  mass balance is later updated.
+  first non-to_bottom wetting front below it. If no such front exists, the amount
+  is skipped here; the deepest to_bottom front can still be assigned lateral flow
+  directly and is handled later by the to_bottom stack solver.
+
+  Also note that in the lateral flow code, "stack" refers to a to_bottom wetting
+  front and any consecutive to_bottom wetting fronts directly above it.
 */
 static void lgar_calc_lateral_fluxes_by_front(double timestep_h, int num_layers, double lateral_flow_psi_threshold_cm,
 					      double lateral_flow_factor, double *cum_layer_thickness_cm,
@@ -1399,7 +1408,7 @@ static void lgar_calc_lateral_fluxes_by_front(double timestep_h, int num_layers,
 
 
 /*
-  Apply lateral flow to a wetting front mass-balance term.
+  Apply lateral flow to a wetting front mass balance term.
 
   The requested lateral flow is capped by the available prior mass so lateral
   flow cannot remove more water than the wetting front currently represents.
@@ -1423,15 +1432,12 @@ static double lgar_apply_lateral_flux_to_prior_mass(double requested_lateral_flu
 
 
 /*
-  Compute the water mass represented within one soil layer.
+  Compute the one-layer mass expression used by the to_bottom stack solver.
 
-  By default, the whole layer interval from layer_top_cm to layer_bottom_cm is
-  counted using stack_theta. If a non-to_bottom wetting front exists immediately
-  above this interval in the same layer, the layer is split: the portion above
-  that front is counted using previous_front->theta, and the portion below it is
-  counted using stack_theta.
-
-  The returned value is an equivalent water depth in cm over the model column.
+  The portion below the nearest same-layer non-to_bottom front is controlled by
+  stack_theta. Any portion above that front is included only as a fixed offset
+  and is not changed by the stack solve. This helper does not reconstruct an
+  arbitrary multi-front profile above the to_bottom region.
 */
 double lgar_to_bottom_stack_layer_mass_cm(int layer_num, double layer_top_cm, double layer_bottom_cm,
 					  double stack_theta, const struct wetting_front *previous_front)
@@ -1853,7 +1859,7 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 
     // case to apply lateral flow to the deepest to_bottom wetting front when other wetting fronts
     // exist above it. This deepest front has no next wetting front, so it is not handled by the
-    // within-layer mass-balance cases below, but it may still contribute lateral flow. Because
+    // within-layer mass balance cases below, but it may still contribute lateral flow. Because
     // interface to_bottom fronts above it share its psi, solve the whole connected to_bottom stack
     // so the storage change equals the lateral flux counted in the mass balance.
     /*************************************************************************************/
