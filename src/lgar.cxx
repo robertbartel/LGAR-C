@@ -1408,20 +1408,51 @@ static void lgar_calc_lateral_fluxes_by_front(double timestep_h, int num_layers,
 
 
 /*
+  Compute the mass expression used by lgar_theta_mass_balance at a specified
+  capillary head.
+
+  The returned value is the amount of water represented by the current wetting
+  front mass balance term, in cm over the model column. This lets lateral flow
+  cap removals at the driest theta the model can represent before the iterative
+  mass balance solve is called.
+*/
+static double lgar_prior_mass_for_psi(double psi_cm, int layer_num, double *delta_theta,
+				      double *delta_thickness, int *soil_type,
+				      struct soil_properties_ *soil_properties)
+{
+  double prior_mass = 0.0;
+
+  for (int k = 1; k <= layer_num; k++) {
+    int soil_num = soil_type[k];
+    double theta = calc_theta_from_h(psi_cm, soil_properties[soil_num].vg_alpha_per_cm,
+				     soil_properties[soil_num].vg_m, soil_properties[soil_num].vg_n,
+				     soil_properties[soil_num].theta_e, soil_properties[soil_num].theta_r);
+    prior_mass += delta_thickness[k] * (theta - delta_theta[k]);
+  }
+
+  return prior_mass;
+}
+
+
+/*
   Apply lateral flow to a wetting front mass balance term.
 
-  The requested lateral flow is capped by the available prior mass so lateral
-  flow cannot remove more water than the wetting front currently represents.
-  The applied amount is subtracted from prior_mass, added to the cumulative
-  lateral flow for the subtimestep, and returned.
+  The requested lateral flow is capped by the removable mass above
+  minimum_prior_mass_cm. That minimum is computed by the caller from the same
+  mass expression that will be used to update theta, so lateral flow cannot ask
+  the following mass balance solve to dry the wetting front below the model's
+  representable dry limit. The applied amount is subtracted from prior_mass,
+  added to the cumulative lateral flow for the subtimestep, and returned.
 */
 static double lgar_apply_lateral_flux_to_prior_mass(double requested_lateral_flux_cm, double *prior_mass,
+						    double minimum_prior_mass_cm,
 						    double *lateral_flow_subtimestep_cm)
 {
   if (requested_lateral_flux_cm <= 0.0 || prior_mass == NULL)
     return 0.0;
 
-  double applied_lateral_flux_cm = fmin(requested_lateral_flux_cm, fmax(*prior_mass, 0.0));
+  double applied_lateral_flux_cm = fmin(requested_lateral_flux_cm,
+					fmax(*prior_mass - fmax(minimum_prior_mass_cm, 0.0), 0.0));
   *prior_mass -= applied_lateral_flux_cm;
 
   if (lateral_flow_subtimestep_cm != NULL)
@@ -1832,7 +1863,11 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
       if (wf_free_drainage_demand == wf)
 	prior_mass += precip_mass_to_add - (free_drainage_demand + mass_correction_for_cached_free_drainage_fluxes + actual_ET_demand);
 
-      double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass, lateral_flow_subtimestep_cm);
+      double minimum_prior_mass_cm = lgar_prior_mass_for_psi(PSI_UPPER_LIM, layer_num, delta_thetas,
+							     delta_thickness, soil_type, soil_properties);
+      double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass,
+									     minimum_prior_mass_cm,
+									     lateral_flow_subtimestep_cm);
       if (applied_lateral_flux_cm > 0.0 && verbosity.compare("high") == 0) {
 	printf("Applied lateral flow to WF %d mass balance: %.10e cm\n", wf, applied_lateral_flux_cm);
       }
@@ -1900,7 +1935,14 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 	if (wf_free_drainage_demand == wf)
 	  prior_mass += precip_mass_to_add - (free_drainage_demand + mass_correction_for_cached_free_drainage_fluxes + actual_ET_demand);
 
-	double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass, lateral_flow_subtimestep_cm);
+	double depth_after_movement_cm = current->depth_cm + current->dzdt_cm_per_h * timestep_h;
+	if (depth_after_movement_cm > column_depth)
+	  depth_after_movement_cm = column_depth + TRUNCATION_DEPTH;
+	double minimum_theta = calc_theta_from_h(PSI_UPPER_LIM, vg_a, vg_m, vg_n, theta_e, theta_r);
+	double minimum_prior_mass_cm = depth_after_movement_cm * (minimum_theta - next->theta);
+	double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass,
+									       minimum_prior_mass_cm,
+									       lateral_flow_subtimestep_cm);
 	if (applied_lateral_flux_cm > 0.0 && verbosity.compare("high") == 0) {
 	  printf("Applied lateral flow to WF %d mass balance: %.10e cm\n", wf, applied_lateral_flux_cm);
 	}
@@ -1930,7 +1972,14 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
         current = listDeleteFront(current->front_num, head, soil_type, soil_properties);
         current = next;
         double mass_after_theta_went_below_theta_r = lgar_calc_mass_bal(cum_layer_thickness_cm, *head);
-        *AET_demand_cm = *AET_demand_cm - fabs(mass_before_theta_went_below_theta_r - mass_after_theta_went_below_theta_r);
+        // Reduce free drainage first so deleting this tiny front does not force negative AET.
+        double removal_correction_cm = fabs(mass_before_theta_went_below_theta_r - mass_after_theta_went_below_theta_r);
+        double free_drainage_reduction_cm = fmin(removal_correction_cm, fmax(free_drainage_demand, 0.0));
+        free_drainage_demand -= free_drainage_reduction_cm;
+        if (free_drainage_subtimestep_cm != NULL)
+          *free_drainage_subtimestep_cm -= free_drainage_reduction_cm;
+        removal_correction_cm -= free_drainage_reduction_cm;
+        *AET_demand_cm = *AET_demand_cm - removal_correction_cm;
         actual_ET_demand = *AET_demand_cm;
         if (verbosity.compare("high") == 0) {
           printf("Deleting WF that will go below theta_r (after)...\n");
@@ -2025,7 +2074,11 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 	if (wf_free_drainage_demand == wf)
 	  prior_mass += precip_mass_to_add - (free_drainage_demand + mass_correction_for_cached_free_drainage_fluxes + actual_ET_demand);
 
-	double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass, lateral_flow_subtimestep_cm);
+	double minimum_prior_mass_cm = lgar_prior_mass_for_psi(PSI_UPPER_LIM, layer_num, delta_thetas,
+							       delta_thickness, soil_type, soil_properties);
+	double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass,
+									       minimum_prior_mass_cm,
+									       lateral_flow_subtimestep_cm);
 	if (applied_lateral_flux_cm > 0.0 && verbosity.compare("high") == 0) {
 	  printf("Applied lateral flow to WF %d mass balance: %.10e cm\n", wf, applied_lateral_flux_cm);
 	}
@@ -3528,6 +3581,13 @@ extern double lgar_theta_mass_balance(int layer_num, int soil_num, double psi_cm
     }
 
     if ( (psi_cm_loc > PSI_UPPER_LIM) && (iter > first_speedup_thresh) ){ //unrealistic pressures, but there are some cases where convergence is possible even at large psi values, and there is a case where AET, free drainage, or WF movement can bring psi above PSI_UPPER_LIM, so we do want to allow a few iterations
+      // Return the dry-limit mass, not the slightly drier mass from the last trial step.
+      psi_cm_loc = PSI_UPPER_LIM;
+      theta = calc_theta_from_h(psi_cm_loc, soil_properties[soil_num].vg_alpha_per_cm, soil_properties[soil_num].vg_m,
+				soil_properties[soil_num].vg_n,soil_properties[soil_num].theta_e,
+				soil_properties[soil_num].theta_r);
+      new_mass = lgar_prior_mass_for_psi(psi_cm_loc, layer_num, delta_theta, delta_thickness, soil_type, soil_properties);
+      delta_mass = fabs(new_mass - prior_mass);
       break;
     }
 
