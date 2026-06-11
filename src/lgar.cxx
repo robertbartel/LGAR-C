@@ -1334,7 +1334,20 @@ double lgar_lateral_flow_support_depth_cm(double layer_top_cm, double layer_bott
   return fmax(0.0, support_bottom_cm - support_top_cm);
 }
 
-// ############################################################################################
+
+/*
+  Compute candidate lateral flow for each wetting front for the current subtimestep.
+
+  A wetting front is eligible when its capillary head is less than or equal to
+  lateral_flow_psi_threshold_cm. The candidate lateral flow is K(theta) times
+  lateral_flow_factor, scaled by the fraction of the LGAR column represented by
+  that wetting front. The function only fills lateral_flux_cm_by_front; it does
+  not remove water from the wetting front state.
+
+  For non-deepest to_bottom fronts, the lateral flow amount is assigned to the
+  first non-to_bottom wetting front below it, because that is the front whose
+  mass balance is later updated.
+*/
 static void lgar_calc_lateral_fluxes_by_front(double timestep_h, int num_layers, double lateral_flow_psi_threshold_cm,
 					      double lateral_flow_factor, double *cum_layer_thickness_cm,
 					      struct wetting_front* head, std::vector<double>& lateral_flux_cm_by_front)
@@ -1384,6 +1397,15 @@ static void lgar_calc_lateral_fluxes_by_front(double timestep_h, int num_layers,
   }
 }
 
+
+/*
+  Apply lateral flow to a wetting front mass-balance term.
+
+  The requested lateral flow is capped by the available prior mass so lateral
+  flow cannot remove more water than the wetting front currently represents.
+  The applied amount is subtracted from prior_mass, added to the cumulative
+  lateral flow for the subtimestep, and returned.
+*/
 static double lgar_apply_lateral_flux_to_prior_mass(double requested_lateral_flux_cm, double *prior_mass,
 						    double *lateral_flow_subtimestep_cm)
 {
@@ -1399,6 +1421,18 @@ static double lgar_apply_lateral_flux_to_prior_mass(double requested_lateral_flu
   return applied_lateral_flux_cm;
 }
 
+
+/*
+  Compute the water mass represented within one soil layer.
+
+  By default, the whole layer interval from layer_top_cm to layer_bottom_cm is
+  counted using stack_theta. If a non-to_bottom wetting front exists immediately
+  above this interval in the same layer, the layer is split: the portion above
+  that front is counted using previous_front->theta, and the portion below it is
+  counted using stack_theta.
+
+  The returned value is an equivalent water depth in cm over the model column.
+*/
 double lgar_to_bottom_stack_layer_mass_cm(int layer_num, double layer_top_cm, double layer_bottom_cm,
 					  double stack_theta, const struct wetting_front *previous_front)
 {
@@ -1410,6 +1444,18 @@ double lgar_to_bottom_stack_layer_mass_cm(int layer_num, double layer_top_cm, do
   return (layer_bottom_cm - layer_top_cm) * stack_theta;
 }
 
+
+/*
+  Compute the current water mass represented by a consecutive stack of to_bottom wetting fronts.
+
+  This helper is used when lateral flow is applied to the deepest to_bottom wetting front stack. Each
+  front in the stack represents the water content of its soil layer down to that layer's bottom. If
+  there is a non-to_bottom wetting front immediately above a stack front in the same layer, only the
+  portion below that upper front is counted. This prevents the stack mass from including water that is
+  represented by a separate wetting front above the to_bottom stack.
+
+  The returned value is an equivalent water depth in cm over the model column.
+*/
 static double lgar_to_bottom_stack_mass_from_profile(int stack_start_front_num, int stack_end_front_num,
 						     double *cum_layer_thickness_cm, struct wetting_front* head)
 {
@@ -1431,6 +1477,13 @@ static double lgar_to_bottom_stack_mass_from_profile(int stack_start_front_num, 
   return stack_mass_cm;
 }
 
+/*
+  Compute the water mass that a consecutive to_bottom wetting front stack would
+  have if all fronts in the stack shared the specified capillary head.
+
+  This is used by the stack lateral flow solver to search for the new common psi
+  that gives the target stack mass after lateral flow has been removed.
+*/
 static double lgar_to_bottom_stack_mass_for_psi(double psi_cm, int stack_start_front_num, int stack_end_front_num,
 						double *cum_layer_thickness_cm, int *soil_type,
 						struct wetting_front* head, struct soil_properties_ *soil_properties)
@@ -1457,6 +1510,14 @@ static double lgar_to_bottom_stack_mass_for_psi(double psi_cm, int stack_start_f
   return stack_mass_cm;
 }
 
+/*
+  Return whether a wetting front was updated by the deepest to_bottom stack
+  lateral flow solve during this subtimestep.
+
+  Upper wetting front mass balance calculations use this flag to decide whether
+  the lower reference front should come from the previous state or from the
+  already-updated current stack state.
+*/
 static bool lgar_front_changed_by_lateral_stack(const struct wetting_front *front,
 						const std::vector<int>& lateral_stack_changed_by_front)
 {
@@ -1465,6 +1526,17 @@ static bool lgar_front_changed_by_lateral_stack(const struct wetting_front *fron
     && lateral_stack_changed_by_front[front->front_num] != 0;
 }
 
+/*
+  Apply lateral flow to the deepest to_bottom wetting front stack.
+
+  A deepest to_bottom front can share one capillary head with a consecutive stack
+  of to_bottom fronts above it. In that case, removing lateral flow from only one
+  front would not conserve the stack mass consistently. This function finds the
+  consecutive to_bottom stack, caps the requested lateral flow by the removable
+  stack mass, solves for the new common psi that gives the reduced stack mass,
+  updates theta, psi, and K for every front in the stack, marks those fronts as
+  changed, and returns the applied lateral flow.
+*/
 static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requested_lateral_flux_cm, int stack_end_front_num,
 								 int num_layers, double *cum_layer_thickness_cm,
 								 int *soil_type, double *frozen_factor,
@@ -1502,6 +1574,7 @@ static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requeste
   double psi_low_cm = 0.0;
   double psi_high_cm = PSI_UPPER_LIM;
 
+  // Bisection search for the common psi that produces the target post-lateral-flow stack mass.
   for (int iter = 0; iter < 120; iter++) {
     double psi_mid_cm = 0.5 * (psi_low_cm + psi_high_cm);
     double stack_mass_cm = lgar_to_bottom_stack_mass_for_psi(psi_mid_cm, stack_start_front_num, stack_end_front_num,
@@ -2193,7 +2266,8 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
       current->depth_cm = cum_layer_thickness_cm[1];
     }
   }
-  return(bottom_boundary_flux_cm);
+  return(bottom_boundary_flux_cm); //the small amount of water that left the LGARTO domain through the lower boundary because it was truncated (WF got slightly too deep), where exceeding the lower boundary by only a small amount is enforced,
+                                   //or the small amount of water needed to close mass balance in the very rare event break_flag was set to true when updating a completely saturated WF. Note that this is different than free drainage, which is explicitly accounted for elsewhere.
 
 }
 
