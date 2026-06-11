@@ -589,9 +589,14 @@ int main(int argc, char *argv[])
   double Ksat_1;
   double Ksat_2;
   double field_capacity;
-  double a;
-  double b;
+  double a_con_res;
+  double b_con_res;
+  double a_con_res_legacy;
   double frac_to_CR;
+  double interflow_psi_threshold;
+  double interflow_factor;
+  double interflow_psi_threshold_legacy;
+  double interflow_factor_legacy;
   double spf_factor;
 
   // double smcmax_set[]   = {0.3513, 0.3773, 0.3617};
@@ -607,9 +612,11 @@ int main(int argc, char *argv[])
   double hydraulic_conductivity_1_set         = 0.446;
   double hydraulic_conductivity_2_set         = 0.0743;
   double field_capacity_set = 103.3;
-  double a_set              = 0.003; 
-  double b_set              = 2.5;
+  double a_con_res_set      = 0.003;
+  double b_con_res_set      = 2.5;
   double frac_to_CR_set     = 0.05;
+  double interflow_psi_threshold_set = 1500.0;
+  double interflow_factor_set        = 1.0;
   double spf_factor_set     = 0.92;
 
   // Get the initial values set through the config file
@@ -625,9 +632,11 @@ int main(int argc, char *argv[])
   model_calib.GetValue("van_genuchten_alpha_2", &vg_alpha_2);
   model_calib.GetValue("hydraulic_conductivity_2", &Ksat_2);
   model_calib.GetValue("field_capacity", &field_capacity);
-  model_calib.GetValue("a", &a);
-  model_calib.GetValue("b", &b);
+  model_calib.GetValue("a_con_res", &a_con_res);
+  model_calib.GetValue("b_con_res", &b_con_res);
   model_calib.GetValue("frac_to_CR", &frac_to_CR);
+  model_calib.GetValue("interflow_psi_threshold", &interflow_psi_threshold);
+  model_calib.GetValue("interflow_factor", &interflow_factor);
   model_calib.GetValue("spf_factor", &spf_factor);
   
   // for (int i=0; i < num_layers; i++)
@@ -643,8 +652,8 @@ int main(int argc, char *argv[])
   // printf("a: %lf \n", vg_alpha_2);
   // printf("a: %lf \n", Ksat_2);
   // printf("field_capacity: %lf \n", field_capacity);
-  // printf("a: %lf \n", a);
-  // printf("a: %lf \n", b);
+  // printf("a_con_res: %lf \n", a_con_res);
+  // printf("b_con_res: %lf \n", b_con_res);
   // printf("a: %lf \n", frac_to_CR);
   // printf("a: %lf \n", spf_factor);
 
@@ -665,9 +674,11 @@ int main(int argc, char *argv[])
   model_calib.SetValue("van_genuchten_alpha_2", &van_genuchten_alpha_2_set);
   model_calib.SetValue("hydraulic_conductivity_2", &hydraulic_conductivity_2_set);
   model_calib.SetValue("field_capacity", &field_capacity_set);
-  model_calib.SetValue("a", &a_set);
-  model_calib.SetValue("b", &b_set);
+  model_calib.SetValue("a_con_res", &a_con_res_set);
+  model_calib.SetValue("b_con_res", &b_con_res_set);
   model_calib.SetValue("frac_to_CR", &frac_to_CR_set);
+  model_calib.SetValue("interflow_psi_threshold", &interflow_psi_threshold_set);
+  model_calib.SetValue("interflow_factor", &interflow_factor_set);
   model_calib.SetValue("spf_factor", &spf_factor_set);
  
   // // get the new/updated values
@@ -686,9 +697,14 @@ int main(int argc, char *argv[])
   model_calib.GetValue("van_genuchten_alpha_2", &vg_alpha_2);
   model_calib.GetValue("hydraulic_conductivity_2", &Ksat_2);
   model_calib.GetValue("field_capacity", &field_capacity);
-  model_calib.GetValue("a", &a);
-  model_calib.GetValue("b", &b);
+  model_calib.GetValue("a_con_res", &a_con_res);
+  model_calib.GetValue("b_con_res", &b_con_res);
+  model_calib.GetValue("a", &a_con_res_legacy);
   model_calib.GetValue("frac_to_CR", &frac_to_CR);
+  model_calib.GetValue("interflow_psi_threshold", &interflow_psi_threshold);
+  model_calib.GetValue("interflow_factor", &interflow_factor);
+  model_calib.GetValue("lateral_flow_psi_threshold", &interflow_psi_threshold_legacy);
+  model_calib.GetValue("lateral_flow_factor", &interflow_factor_legacy);
   model_calib.GetValue("spf_factor", &spf_factor);
 
 
@@ -760,30 +776,65 @@ int main(int argc, char *argv[])
     throw std::runtime_error(errMsg.str());
   }
 
-  if (fabs(a  - a_set) > 1.E-5) {
+  if (fabs(a_con_res  - a_con_res_set) > 1.E-5) {
     std::stringstream errMsg;
-    errMsg << "Mismatch between a calibrated values set and get "<< a_set<<" "<< a
+    errMsg << "Mismatch between a_con_res calibrated values set and get "<< a_con_res_set<<" "<< a_con_res
       << " which is unexpected. \n";
     throw std::runtime_error(errMsg.str());
   }
 
-  if (fabs(b  - b_set) > 1.E-5) {
+  if (fabs(b_con_res  - b_con_res_set) > 1.E-5) {
     std::stringstream errMsg;
-    errMsg << "Mismatch between a calibrated values set and get "<< a_set<<" "<< a
+    errMsg << "Mismatch between b_con_res calibrated values set and get "<< b_con_res_set<<" "<< b_con_res
+      << " which is unexpected. \n";
+    throw std::runtime_error(errMsg.str());
+  }
+
+  if (fabs(a_con_res_legacy  - a_con_res_set) > 1.E-5) {
+    std::stringstream errMsg;
+    errMsg << "Mismatch between a legacy alias and a_con_res calibrated values "<< a_con_res_set<<" "<< a_con_res_legacy
       << " which is unexpected. \n";
     throw std::runtime_error(errMsg.str());
   }
 
   if (fabs(frac_to_CR  - frac_to_CR_set) > 1.E-5) {
     std::stringstream errMsg;
-    errMsg << "Mismatch between a calibrated values set and get "<< a_set<<" "<< a
+    errMsg << "Mismatch between frac_to_CR calibrated values set and get "<< frac_to_CR_set<<" "<< frac_to_CR
+      << " which is unexpected. \n";
+    throw std::runtime_error(errMsg.str());
+  }
+
+  if (fabs(interflow_psi_threshold  - interflow_psi_threshold_set) > 1.E-5) {
+    std::stringstream errMsg;
+    errMsg << "Mismatch between interflow_psi_threshold calibrated values set and get "<< interflow_psi_threshold_set<<" "<< interflow_psi_threshold
+      << " which is unexpected. \n";
+    throw std::runtime_error(errMsg.str());
+  }
+
+  if (fabs(interflow_factor  - interflow_factor_set) > 1.E-5) {
+    std::stringstream errMsg;
+    errMsg << "Mismatch between interflow_factor calibrated values set and get "<< interflow_factor_set<<" "<< interflow_factor
+      << " which is unexpected. \n";
+    throw std::runtime_error(errMsg.str());
+  }
+
+  if (fabs(interflow_psi_threshold_legacy  - interflow_psi_threshold_set) > 1.E-5) {
+    std::stringstream errMsg;
+    errMsg << "Mismatch between lateral_flow_psi_threshold legacy alias and interflow_psi_threshold calibrated values "<< interflow_psi_threshold_set<<" "<< interflow_psi_threshold_legacy
+      << " which is unexpected. \n";
+    throw std::runtime_error(errMsg.str());
+  }
+
+  if (fabs(interflow_factor_legacy  - interflow_factor_set) > 1.E-5) {
+    std::stringstream errMsg;
+    errMsg << "Mismatch between lateral_flow_factor legacy alias and interflow_factor calibrated values "<< interflow_factor_set<<" "<< interflow_factor_legacy
       << " which is unexpected. \n";
     throw std::runtime_error(errMsg.str());
   }
 
   if (fabs(spf_factor  - spf_factor_set) > 1.E-5) {
     std::stringstream errMsg;
-    errMsg << "Mismatch between a calibrated values set and get "<< a_set<<" "<< a
+    errMsg << "Mismatch between spf_factor calibrated values set and get "<< spf_factor_set<<" "<< spf_factor
       << " which is unexpected. \n";
     throw std::runtime_error(errMsg.str());
   }
@@ -833,9 +884,11 @@ int main(int argc, char *argv[])
   printf("vg_alpha_1 = %lf \n", vg_alpha_1);
   printf("vg_alpha_2 = %lf \n", vg_alpha_2);
   printf("field_capacity = %lf \n", field_capacity);
-  printf("a = %lf \n", a);
-  printf("b = %lf \n", b);
+  printf("a_con_res = %lf \n", a_con_res);
+  printf("b_con_res = %lf \n", b_con_res);
   printf("frac_to_CR = %lf \n", frac_to_CR);
+  printf("interflow_psi_threshold = %lf \n", interflow_psi_threshold);
+  printf("interflow_factor = %lf \n", interflow_factor);
   printf("spf_factor = %lf \n", spf_factor);
   std::cout<<"| *************************************** \n";
   std::cout<<"| LASAM Calibration test passed? YES \n";

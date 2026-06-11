@@ -84,11 +84,11 @@ public:
     this->calib_var_names[5]  = "van_genuchten_alpha_2";
     this->calib_var_names[6]  = "hydraulic_conductivity_2";
     this->calib_var_names[7]  = "field_capacity";
-    this->calib_var_names[8]  = "a";
-    this->calib_var_names[9]  = "b";
+    this->calib_var_names[8]  = "a_con_res";
+    this->calib_var_names[9]  = "b_con_res";
     this->calib_var_names[10] = "frac_to_CR";
-    this->calib_var_names[11] = "lateral_flow_psi_threshold";
-    this->calib_var_names[12] = "lateral_flow_factor";
+    this->calib_var_names[11] = "interflow_psi_threshold";
+    this->calib_var_names[12] = "interflow_factor";
     this->calib_var_names[13] = "spf_factor";
 
 
