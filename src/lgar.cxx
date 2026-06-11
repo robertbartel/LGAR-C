@@ -1435,14 +1435,30 @@ static double lgar_prior_mass_for_psi(double psi_cm, int layer_num, double *delt
 
 
 /*
+  Return the driest capillary head that lateral flow is allowed to create.
+
+  Lateral flow is activated at lateral_flow_psi_threshold_cm, and a single
+  lateral flow removal is capped so the updated wetting front does not dry more
+  than 1 cm past that threshold in terms of capillary head. The tiny buffer 
+  keeps numerical solves inside that limit.
+*/
+static double lgar_lateral_flow_psi_cap_cm(double lateral_flow_psi_threshold_cm)
+{
+  const double lateral_flow_psi_cap_buffer_cm = 1.0e-3;
+  return fmax(0.0, fmin(lateral_flow_psi_threshold_cm + 1.0 - lateral_flow_psi_cap_buffer_cm,
+			PSI_UPPER_LIM));
+}
+
+
+/*
   Apply lateral flow to a wetting front mass balance term.
 
   The requested lateral flow is capped by the removable mass above
   minimum_prior_mass_cm. That minimum is computed by the caller from the same
   mass expression that will be used to update theta, so lateral flow cannot ask
-  the following mass balance solve to dry the wetting front below the model's
-  representable dry limit. The applied amount is subtracted from prior_mass,
-  added to the cumulative lateral flow for the subtimestep, and returned.
+  the following mass balance solve to dry the wetting front beyond the chosen
+  lateral flow psi cap. The applied amount is subtracted from prior_mass, added
+  to the cumulative lateral flow for the subtimestep, and returned.
 */
 static double lgar_apply_lateral_flux_to_prior_mass(double requested_lateral_flux_cm, double *prior_mass,
 						    double minimum_prior_mass_cm,
@@ -1570,11 +1586,13 @@ static bool lgar_front_changed_by_lateral_stack(const struct wetting_front *fron
   of to_bottom fronts above it. In that case, removing lateral flow from only one
   front would not conserve the stack mass consistently. This function finds the
   consecutive to_bottom stack, caps the requested lateral flow by the removable
-  stack mass, solves for the new common psi that gives the reduced stack mass,
-  updates theta, psi, and K for every front in the stack, marks those fronts as
-  changed, and returns the applied lateral flow.
+  stack mass, solves for the new common psi that gives the reduced stack mass
+  without drying past the lateral flow psi cap, updates theta, psi, and K for
+  every front in the stack, marks those fronts as changed, and returns the
+  applied lateral flow.
 */
-static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requested_lateral_flux_cm, int stack_end_front_num,
+static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requested_lateral_flux_cm, double lateral_flow_psi_cap_cm,
+								 int stack_end_front_num,
 								 int num_layers, double *cum_layer_thickness_cm,
 								 int *soil_type, double *frozen_factor,
 								 struct wetting_front** head,
@@ -1601,7 +1619,7 @@ static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requeste
   double prior_stack_mass_cm = lgar_to_bottom_stack_mass_from_profile(stack_start_front_num, stack_end_front_num,
 								      cum_layer_thickness_cm, state_previous);
 
-  double minimum_stack_mass_cm = lgar_to_bottom_stack_mass_for_psi(PSI_UPPER_LIM, stack_start_front_num, stack_end_front_num,
+  double minimum_stack_mass_cm = lgar_to_bottom_stack_mass_for_psi(lateral_flow_psi_cap_cm, stack_start_front_num, stack_end_front_num,
 								  cum_layer_thickness_cm, soil_type, *head, soil_properties);
   double applied_lateral_flux_cm = fmin(requested_lateral_flux_cm, fmax(prior_stack_mass_cm - minimum_stack_mass_cm, 0.0));
   if (applied_lateral_flux_cm <= 0.0)
@@ -1609,7 +1627,7 @@ static double lgar_apply_lateral_flux_to_deepest_to_bottom_stack(double requeste
 
   double target_stack_mass_cm = prior_stack_mass_cm - applied_lateral_flux_cm;
   double psi_low_cm = 0.0;
-  double psi_high_cm = PSI_UPPER_LIM;
+  double psi_high_cm = lateral_flow_psi_cap_cm;
 
   // Bisection search for the common psi that produces the target post-lateral-flow stack mass.
   for (int iter = 0; iter < 120; iter++) {
@@ -1695,6 +1713,7 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
   lgar_calc_lateral_fluxes_by_front(timestep_h, num_layers, lateral_flow_psi_threshold_cm,
 				    lateral_flow_factor, cum_layer_thickness_cm,
 				    state_previous, lateral_flux_cm_by_front);
+  double lateral_flow_psi_cap_cm = lgar_lateral_flow_psi_cap_cm(lateral_flow_psi_threshold_cm);
 
   current = *head;
 
@@ -1863,7 +1882,7 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
       if (wf_free_drainage_demand == wf)
 	prior_mass += precip_mass_to_add - (free_drainage_demand + mass_correction_for_cached_free_drainage_fluxes + actual_ET_demand);
 
-      double minimum_prior_mass_cm = lgar_prior_mass_for_psi(PSI_UPPER_LIM, layer_num, delta_thetas,
+      double minimum_prior_mass_cm = lgar_prior_mass_for_psi(lateral_flow_psi_cap_cm, layer_num, delta_thetas,
 							     delta_thickness, soil_type, soil_properties);
       double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass,
 									     minimum_prior_mass_cm,
@@ -1899,7 +1918,8 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
     // so the storage change equals the lateral flux counted in the mass balance.
     /*************************************************************************************/
     if (wf == number_of_wetting_fronts && current->to_bottom && current->layer_num == num_layers && number_of_wetting_fronts > num_layers) {
-      double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_deepest_to_bottom_stack(lateral_flux_cm_by_front[wf], wf,
+      double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_deepest_to_bottom_stack(lateral_flux_cm_by_front[wf],
+											  lateral_flow_psi_cap_cm, wf,
 											  num_layers, cum_layer_thickness_cm,
 											  soil_type, frozen_factor, head,
 											  state_previous, soil_properties,
@@ -1938,7 +1958,7 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 	double depth_after_movement_cm = current->depth_cm + current->dzdt_cm_per_h * timestep_h;
 	if (depth_after_movement_cm > column_depth)
 	  depth_after_movement_cm = column_depth + TRUNCATION_DEPTH;
-	double minimum_theta = calc_theta_from_h(PSI_UPPER_LIM, vg_a, vg_m, vg_n, theta_e, theta_r);
+	double minimum_theta = calc_theta_from_h(lateral_flow_psi_cap_cm, vg_a, vg_m, vg_n, theta_e, theta_r);
 	double minimum_prior_mass_cm = depth_after_movement_cm * (minimum_theta - next->theta);
 	double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass,
 									       minimum_prior_mass_cm,
@@ -2074,7 +2094,7 @@ extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_
 	if (wf_free_drainage_demand == wf)
 	  prior_mass += precip_mass_to_add - (free_drainage_demand + mass_correction_for_cached_free_drainage_fluxes + actual_ET_demand);
 
-	double minimum_prior_mass_cm = lgar_prior_mass_for_psi(PSI_UPPER_LIM, layer_num, delta_thetas,
+	double minimum_prior_mass_cm = lgar_prior_mass_for_psi(lateral_flow_psi_cap_cm, layer_num, delta_thetas,
 							       delta_thickness, soil_type, soil_properties);
 	double applied_lateral_flux_cm = lgar_apply_lateral_flux_to_prior_mass(lateral_flux_cm_by_front[wf], &prior_mass,
 									       minimum_prior_mass_cm,
