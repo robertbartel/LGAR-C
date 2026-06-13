@@ -139,12 +139,15 @@ struct lgar_bmi_parameters
   double mbal_tol;                       // if a substep's mass balance error is larger than this number, the model will abort. By default it is set to a large value (10 cm).
   double ponded_depth_cm;                // amount of water on the surface unavailable for surface runoff
   double ponded_depth_max_cm;            // maximum amount of water on the surface unavailable for surface runoff
-  double a = 0.0;                        // parameter for nonlinear reservoir
-  double b = 0.0;                        // parameter for nonlinear reservoir
+  double a_con_res = 0.0;                // parameter for nonlinear reservoir
+  double b_con_res = 0.0;                // parameter for nonlinear reservoir
   double frac_to_CR = 0.0;               // parameter for nonlinear reservoir 
-  double a_slow = 0.0;                        // parameter for nonlinear reservoir
-  double b_slow = 0.0;                        // parameter for nonlinear reservoir
+  double a_con_res_slow = 0.0;           // parameter for nonlinear reservoir
+  double b_con_res_slow = 0.0;           // parameter for nonlinear reservoir
   double frac_slow = 0.0;               // parameter for nonlinear reservoir 
+  bool   interflow_enabled = false;        // if true, wetting fronts can contribute interflow to the GIUH queue
+  double interflow_psi_threshold_cm = 0.0; // interflow is zero when a wetting front's psi is above this threshold [cm]
+  double interflow_factor = 0.0;           // multiplier applied to K(theta) to calculate wetting front interflow
   double spf_factor = 0.98;              // parameter that controls the theta value above which contributions to the nonlinear reservoir will be made
   double precip_previous_timestep_cm;    // amount of rainfall (previous time step)
 
@@ -183,6 +186,7 @@ struct lgar_mass_balance_variables
   double volAET_timestep_cm;         // volume of AET at each timestep
   double volPET_timestep_cm;         // volume of PET at each timestep
   double volrech_timestep_cm;        // volume of water leaving soil to the ground water (ground water recharge)
+  double volinterflow_timestep_cm;// volume of wetting front interflow at each timestep
   double volrunoff_giuh_timestep_cm; // volume of giuh runoff at each timestep
   double volQ_timestep_cm;           // total outgoing water (surface runoff + water from conceptual reservoirs, both of which go through GIUH)
   double volQ_CR_timestep_cm;        // outgoing water just from conceptual reservoirs
@@ -211,6 +215,7 @@ struct lgar_mass_balance_variables
   double accumulated_free_drainage = 0.0;
 
   double volrech_cm;          // volume of water leaving soil through the bottom of the domain (ground water recharge)
+  double volinterflow_cm;  // volume of wetting front interflow routed through GIUH
   double volrunoff_giuh_cm;   // volume of giuh runoff
   double volQ_cm;             // total outgoing water
   double volQ_CR_cm;          // water outgoing just from conceptual reservoirs
@@ -250,12 +255,14 @@ struct lgar_calib_parameters
 
   double field_capacity_psi;    // field capacity in capillary head [cm]
   double ponded_depth_max;      // maximum ponded depth of surface water [cm]
-  double a;                      // parameter for nonlinear reservoir
-  double b;                      // parameter for nonlinear reservoir
+  double a_con_res;              // parameter for nonlinear reservoir
+  double b_con_res;              // parameter for nonlinear reservoir
   double frac_to_CR;             // parameter for nonlinear reservoir
-  double a_slow;                      // parameter for nonlinear reservoir
-  double b_slow;                      // parameter for nonlinear reservoir
+  double a_con_res_slow;         // parameter for nonlinear reservoir
+  double b_con_res_slow;         // parameter for nonlinear reservoir
   double frac_slow;             // parameter for nonlinear reservoir
+  double interflow_psi_threshold_cm; // interflow is zero when a wetting front's psi is above this threshold [cm]
+  double interflow_factor;    // multiplier applied to K(theta) to calculate wetting front interflow
   double spf_factor;             // parameter for nonlinear reservoir
 
 };
@@ -352,7 +359,8 @@ extern double lgar_insert_water(bool use_closed_form_G, int nint, double timeste
 				double *frozen_factor, struct wetting_front* head, struct soil_properties_ *soil_properties);
 
 // the subroutine moves wetting fronts, merges wetting fronts, and does the mass balance correction if needed
-extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_subtimestep_cm, double *ponded_depth_cm, int wf_free_drainage_demand,
+extern double lgar_move_wetting_fronts(double timestep_h, double *free_drainage_subtimestep_cm, double *interflow_subtimestep_cm, double interflow_psi_threshold_cm,
+				     double interflow_factor, double *ponded_depth_cm, int wf_free_drainage_demand,
 				     double old_mass, double mass_correction_for_cached_free_drainage_fluxes, int number_of_layers, double *actual_ET_demand,
 				     double *cum_layer_thickness_cm, int *soil_type_by_layer, double *frozen_factor,
 				     struct wetting_front** head, struct wetting_front* state_previous, struct soil_properties_ *soil_properties);
@@ -450,8 +458,8 @@ extern bool is_epsilon_less_than(double a, double eps);
 //function for contribtion to streamflow from conceptual reservoir
 extern double calc_CR_Q(
     double subtimestep_h,
-    double a_fast, double a_slow,
-    double b_fast, double b_slow,
+    double a_con_res, double a_con_res_slow,
+    double b_con_res, double b_con_res_slow,
     double frac_slow,  // fraction (0 - 1) of recharge going to slow reservoir
     double precip_for_CR_subtimestep_cm_per_h,
     double *CR_fast_storage_cm,
