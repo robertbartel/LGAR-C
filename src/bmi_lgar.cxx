@@ -14,8 +14,9 @@
 #include "../include/all.hxx"
 
 
-// default verbosity is set to 'none' other option 'high' or 'low' needs to be specified in the config file
-string verbosity="none";
+// Default verbosity is derived from the compile-time LGAR_DEBUG level (see all.hxx); the
+// config-file 'verbosity' key ('none'/'low'/'high') overrides it at run time.
+string verbosity=LGAR_DEFAULT_VERBOSITY;
 
 // some macros for flux caching, these are not relevant if flux caching is disabled in the config file.
 // precip intensity above which flux caching does not occur

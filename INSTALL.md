@@ -2,6 +2,21 @@
 
 Detailed instructions on how to build and run LASAM in two modes (standalone and nextgen framework). Building LASAM requires [GCC](https://gcc.gnu.org) and [CMAKE](https://cmake.org/) on your machine.
 
+## Debug verbosity (build-time default)
+Runtime output is controlled by the `verbosity` (`none`/`low`/`high`) key in the config file, which governs screen output and file writing during a run. When that key is absent, the *default* verbosity is chosen at build time via the CMake `DEBUG_VERBOSITY` variable, so default builds stay quiet and lighter for ngen runs while debug builds are verbose out of the box. Set it when generating the build directory:
+
+```shell
+cmake -B build -S . -DDEBUG_VERBOSITY=1
+```
+
+`DEBUG_VERBOSITY` uses greater-than-or-equal logic (a setting of `2` includes `0`, `1`, and `2`) and maps to the default run-time verbosity:
+
+- `0`: Nothing → default verbosity `none` (default for non-`Debug` builds)
+- `1`: Model info, e.g. the mass balance summary → default verbosity `low` (default when `CMAKE_BUILD_TYPE=Debug`)
+- `2`: BMI info, e.g. per-timestep detail → default verbosity `high`
+
+A `verbosity` entry in the config file always overrides this compiled-in default.
+
 ## Standalone mode example
 The examples provided here simulate infiltration and surface runoff using the data from field sites located in Phillipsburg, Kansas, and Bushland, Texas. 
 ### Build

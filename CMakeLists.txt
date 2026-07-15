@@ -19,6 +19,31 @@ message(CMAKE_CXX_COMPILER " ${CMAKE_CXX_COMPILER}")
 message(CMAKE_C_COMPILER " ${CMAKE_C_COMPILER}")
 message("CMAKE_BUILD_TYPE = ${CMAKE_BUILD_TYPE}")
 
+# A numeric verbosity level can be set for debug output printed/logged during execution.
+# It is exposed to the source as the LGAR_DEBUG macro, which uses ">=" logic (a setting of 2
+# includes levels 0, 1, and 2). LGAR_DEBUG selects the *default* run-time verbosity
+# (none/low/high) applied when the config file does not set a "verbosity" key; the config key
+# always overrides it. Default builds thus stay quiet and lighter for ngen runs.
+# 0: Nothing (default run-time verbosity "none")
+# 1: Model info, e.g. the end-of-run mass balance summary (default verbosity "low")
+# 2: BMI info, e.g. per-timestep detail (default verbosity "high")
+# Use 1 by default when build type is "Debug"
+if (NOT DEFINED DEBUG_VERBOSITY AND "${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+    set(DEBUG_VERBOSITY 1)
+    # Use 0 by default for any build types other than "Debug"
+elseif (NOT DEFINED DEBUG_VERBOSITY)
+    set(DEBUG_VERBOSITY 0)
+    # Catch any "ON" or equivalent, excluding all integers other than "1" (which we want to handle separately)
+elseif (${DEBUG_VERBOSITY} AND NOT ${DEBUG_VERBOSITY} GREATER "1" AND NOT ${DEBUG_VERBOSITY} LESS_EQUAL "0")
+    set(DEBUG_VERBOSITY 1)
+    # Should catch any other values except an integer greater than 1 (which we want to use directly)
+elseif (NOT ${DEBUG_VERBOSITY} GREATER "1")
+    set(DEBUG_VERBOSITY 0)
+endif ()
+# While not an explicit condition, DEBUG_VERBOSITY is left alone if set to some integer greater than 1
+
+add_compile_definitions(LGAR_DEBUG=${DEBUG_VERBOSITY})
+
 # standalone
 add_executable(lasam_standalone ./src/bmi_main_lgar.cxx ./src/bmi_lgar.cxx ./src/lgar.cxx ./src/soil_funcs.cxx ./src/conceptual_reservoir.cxx
              ./src/linked_list.cxx ./src/mem_funcs.cxx ./src/util_funcs.cxx ./src/aet.cxx

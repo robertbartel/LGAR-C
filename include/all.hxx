@@ -31,6 +31,25 @@ using namespace std;
 #define FALSE 0
 #define ONE 1
 
+// Compile-time debug verbosity level, normally set via the CMake DEBUG_VERBOSITY variable
+// (see CMakeLists.txt). It selects the *default* run-time verbosity (below) used when the
+// config file does not specify one; the config-file "verbosity" key always overrides it.
+//   0: Nothing   1: Model info (e.g. mass balance summary)   2: BMI info (e.g. per-timestep detail)
+// Fallback definition here keeps builds that do not set it (e.g. via CMake) compiling cleanly.
+#ifndef LGAR_DEBUG
+#define LGAR_DEBUG 0
+#endif
+
+// Map the compile-time LGAR_DEBUG level to the default run-time verbosity ("none"/"low"/"high").
+// This is only the default: a "verbosity" entry in the config file overrides it at run time.
+#if LGAR_DEBUG >= 2
+#define LGAR_DEFAULT_VERBOSITY "high"
+#elif LGAR_DEBUG >= 1
+#define LGAR_DEFAULT_VERBOSITY "low"
+#else
+#define LGAR_DEFAULT_VERBOSITY "none"
+#endif
+
 extern string verbosity;
 
 #define use_bmi_flag FALSE       // TODO set to TRUE to run in BMI environment
